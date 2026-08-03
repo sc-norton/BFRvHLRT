@@ -1,0 +1,392 @@
+---
+title: "Muscle Proteomic Response to Blood Flow Restriction Training"
+subtitle: "Preliminary Analysis Report — BFR vs. HLRT"
+author: "EDIT ME: Your Name"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: false
+geometry: margin=1in
+fontsize: 11pt
+header-includes:
+  - \usepackage{fancyhdr}
+  - \usepackage{booktabs}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \fancyhead[R]{\small BFR Proteomics — Preliminary Report}
+  - \fancyfoot[C]{\thepage}
+  - \renewcommand{\headrulewidth}{0.4pt}
+---
+
+<!--
+HOW TO USE THIS FILE
+====================
+1. Save this in your project root (same level as 01_normalization/, 03_analysis/,
+   04_figures/), or adjust `base_dir` in the setup chunk below.
+2. If you've never knit to PDF before, you'll need a LaTeX distribution:
+     install.packages("tinytex")
+     tinytex::install_tinytex()
+3. In RStudio: use the dropdown arrow next to "Knit" (not just the button
+   itself) and choose "Knit to PDF" -- RStudio remembers the last format
+   you picked per-document, so if this file (or one you copied it from)
+   was ever knit to HTML before, the button can default to HTML even
+   though the YAML above says pdf_document. Alternatively, from the
+   console: rmarkdown::render("00_project_report.Rmd", output_format = "pdf_document")
+   which ignores the remembered button state entirely.
+4. Search for "EDIT ME" throughout this file -- those are the spots that need
+   your study-specific narrative (PI name, sample sizes, biological
+   interpretation, etc.). Everything else pulls automatically from your
+   pipeline's saved CSVs/figures, so re-knitting after a pipeline re-run
+   updates the numbers/plots without you touching this file.
+5. Any figure/table that isn't found on disk yet will show as a placeholder
+   note instead of breaking the render, so you can knit this at any point
+   in the pipeline, not just at the very end.
+-->
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(dplyr, readr, knitr)
+
+# --- Project root -------------------------------------------------------
+base_dir <- tryCatch(rprojroot::find_rstudio_root_file(), error = function(e) getwd())
+knitr::opts_knit$set(root.dir = base_dir)
+
+# --- Paths to existing pipeline outputs ----------------------------------
+# All relative to base_dir; nothing here re-runs analysis, it only reads
+# files your normalization / GSEA / figure scripts already wrote.
+p <- list(
+  # Normalization: data
+  sample_summary_raw = "01_normalization/c_data/00_raw_sample_summary.csv",
+  protein_report      = "01_normalization/c_data/11_protein_report_BFR.csv",
+  outlier_diag_csv     = "01_normalization/c_data/06_outlier_diagnostics_BFR.csv",
+
+  # Normalization: reports
+  sample_report        = "01_normalization/b_reports/12_sample_report_BFR.csv",
+  filtering_effects     = "01_normalization/b_reports/02_filtering_effects_BFR.csv",
+  filtering_plot        = "01_normalization/b_reports/04_filtering_plot_BFR.pdf",
+  contam_bm_plot        = "01_normalization/b_reports/01_blood_v_muscle_intensity_plot_raw.pdf",
+  contam_donut          = "01_normalization/b_reports/05_contaminant_classification.png",
+  outlier_diag_plot     = "01_normalization/b_reports/06_outlier_diagnostic_plots_BFR.pdf",
+  pca_raw               = "01_normalization/b_reports/09_pca_raw_BFR.pdf",
+  pca_postnorm           = "01_normalization/b_reports/09_pca_postnorm_BFR.pdf",
+  cv_violin_prenorm      = "01_normalization/b_reports/07_cv_violin_BFR_prenorm.pdf",
+  cv_violin_norm         = "01_normalization/b_reports/07_cv_violin_BFR_normalized.pdf",
+
+  # Analysis figures (fig_02)
+  fig02_da    = "04_figures/fig_02/fig_02_A.png",
+  fig02_gsea  = "04_figures/fig_02/fig_02_B.png",
+  fig02_upset = "04_figures/fig_02/fig_02_C.png",
+  fig02_cv    = "04_figures/fig_02/fig_02_D.png",
+  fig02_full  = "04_figures/fig_02/fig_02.png"
+)
+p <- lapply(p, function(x) file.path(base_dir, x))
+
+# --- Helpers: fail gracefully instead of breaking the knit ---------------
+include_fig <- function(path, caption = "", width = "85%") {
+  if (file.exists(path)) {
+    cat(sprintf("![%s](%s){width=%s}\n\n", caption, path, width))
+  } else {
+    cat(sprintf("*[Figure not yet available: `%s` — run the corresponding pipeline step to generate it.]*\n\n",
+                basename(path)))
+  }
+}
+
+include_table <- function(path, caption = "", max_rows = 20) {
+  if (file.exists(path)) {
+    df <- read.csv(path)
+    if (nrow(df) > max_rows) {
+      cat(sprintf("*(showing first %d of %d rows)*\n\n", max_rows, nrow(df)))
+      df <- head(df, max_rows)
+    }
+    print(knitr::kable(df, caption = caption, row.names = FALSE, booktabs = TRUE))
+  } else {
+    cat(sprintf("*[Table not yet available: `%s`]*\n\n", basename(path)))
+  }
+}
+```
+
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+
+{\LARGE \bfseries Muscle Proteomic Response to Blood Flow Restriction Training}
+
+\vspace{0.5cm}
+{\Large Preliminary Analysis Report}
+
+\vspace{1.5cm}
+{\large Prepared for: \textbf{EDIT ME: PI Name}}
+
+\vspace{0.3cm}
+{\large Prepared by: \textbf{EDIT ME: Your Name}}
+
+\vspace{0.3cm}
+{\large `r format(Sys.Date(), '%B %d, %Y')`}
+
+\vspace{2cm}
+\begin{minipage}{0.8\textwidth}
+\small
+\textit{This report summarizes data preprocessing, quality control, normalization,
+differential abundance, and pathway enrichment analyses completed to date for the
+BFR vs. HLRT muscle proteomics study. Results are preliminary and subject to
+revision as the analysis pipeline continues.}
+\end{minipage}
+
+\vfill
+\end{titlepage}
+
+\newpage
+\tableofcontents
+\newpage
+
+# Project Overview
+
+EDIT ME: 1-2 paragraphs on study background/aims — e.g. blood flow restriction
+(BFR) vs. high-load resistance training (HLRT), what muscle adaptation
+question this proteomics dataset addresses, cohort size, timepoints
+(pre/post training), and tissue collected.
+
+**Study design at a glance:**
+
+```{r contrast-table}
+contrast_tbl <- tibble::tribble(
+  ~Comparison,      ~Contrast,                    ~`Biological question`,
+  "Baseline",       "BFR_PRE vs HLRT_PRE",        "Do the two arms differ before training begins?",
+  "Training_BFR",   "BFR_POST vs BFR_PRE",        "How does the muscle proteome change with BFR training?",
+  "Training_HLRT",  "HLRT_POST vs HLRT_PRE",      "How does the muscle proteome change with HLRT training?",
+  "Post_training",  "BFR_POST vs HLRT_POST",      "Do the two arms differ after training?",
+  "Interaction",    "(BFR_POST-BFR_PRE) vs (HLRT_POST-HLRT_PRE)", "Does the training response itself differ by modality?"
+)
+knitr::kable(contrast_tbl, booktabs = TRUE)
+```
+
+```{r sample-summary-text, results='asis'}
+include_table(p$sample_report, caption = "Final sample counts by group (post-QC).")
+```
+
+\newpage
+
+# Pipeline Overview
+
+The analysis pipeline proceeds through the following stages, each detailed
+in the sections below:
+
+1. **Data preprocessing** — raw intensity/metadata loading, annotation cleanup, rerun consolidation
+2. **Contaminant assessment** — tissue-specificity (HPA) and blood-protein flagging
+3. **Filtering** — contaminant removal and per-group missingness filtering
+4. **Outlier detection** — consensus-based sample QC
+5. **Normalization** — cyclic loess normalization
+6. **Differential abundance analysis** — limma, 5 contrasts
+7. **Pathway / enrichment analysis** — GSEA + ORA across 7 databases, with redundancy filtering
+
+\newpage
+
+# 1. Data Preprocessing
+
+Raw protein-group intensities and sample metadata were loaded and restructured
+prior to any filtering:
+
+- Protein annotation columns (UniProt ID, protein name, gene symbol,
+  description) were parsed from the search-engine output, and multi-protein
+  group matches were collapsed to their first (primary) match.
+- cRAP (common Repository of Adventitious Proteins) contaminant tags were
+  flagged directly from the raw protein group string, before any trimming
+  could drop that information.
+- Sample columns were cleaned to a consistent `S###` naming convention.
+- **Rerun consolidation:** samples with a trailing "r"/"R" suffix (indicating
+  a repeat MS injection) were identified and merged onto their base sample
+  name, with a `rerun_level` flag retained in the metadata for traceability.
+- Metadata and intensity columns were validated to be in 1:1 correspondence
+  before proceeding (a hard `stopifnot` check — the pipeline halts rather
+  than silently misaligning samples).
+
+```{r raw-summary, results='asis'}
+include_table(p$sample_summary_raw, caption = "Raw sample counts by group, prior to any QC or filtering.")
+```
+
+\newpage
+
+# 2. Contaminant Assessment
+
+Two independent contamination checks were applied to every protein, in
+addition to a per-sample contamination index:
+
+**A. Tissue specificity (Human Protein Atlas).** Each protein's UniProt ID
+was checked against the HPA skeletal muscle gene list; proteins absent from
+this reference were flagged as not muscle-specific.
+
+**B. Blood protein blacklist.** A curated list of classic blood/plasma
+contaminant gene families was applied — albumin & lipid transport proteins,
+coagulation factors, complement system components, hemoglobins, acute-phase
+proteins, and platelet/neutrophil markers — supplemented dynamically with
+any immunoglobulin (IGH/IGK/IGL) or keratin (KRT) genes detected in this
+specific dataset.
+
+**C. Sample-level contamination index.** For every sample, the summed
+intensity of blood markers (ALB, HBB, HBA1) vs. muscle markers (MB, CKM)
+was expressed as a percentage of total intensity, giving a blood:muscle
+(B:M) ratio per sample — a diagnostic for samples with unusually high blood
+contamination (e.g. from incomplete blood clearance during biopsy).
+
+```{r contam-bm-plot, results='asis'}
+include_fig(p$contam_bm_plot, caption = "Blood vs. muscle marker proportion of total intensity, per sample.")
+```
+
+```{r contam-donut, results='asis'}
+include_fig(p$contam_donut, caption = "Classification of flagged contaminant proteins by category.", width = "60%")
+```
+
+\newpage
+
+# 3. Filtering
+
+Proteins and samples were filtered in the following order:
+
+1. **Zero $\rightarrow$ missing.** Raw zero-intensity values (an artifact of the
+   search engine, not a true measurement of zero abundance) were converted
+   to `NA`.
+2. **HPA muscle filter.** Proteins not annotated as muscle-expressed in the
+   Human Protein Atlas were removed.
+3. **Blood blacklist filter.** Proteins matching the blood contaminant gene
+   list (Section 2B) were removed.
+4. **Missingness filter.** Proteins were required to be observed in at
+   least 50% of samples *within* at least one group (BFR or HLRT), rather
+   than 50% of the full cohort — this retains proteins that are
+   consistently detected in one arm even if largely absent in the other,
+   which a whole-cohort threshold would have discarded.
+
+```{r filtering-plot, results='asis'}
+include_fig(p$filtering_plot, caption = "Number of proteins retained at each filtering step.", width = "70%")
+```
+
+```{r filtering-table, results='asis'}
+include_table(p$filtering_effects, caption = "Filtering effects: proteins before/after each step.")
+```
+
+\newpage
+
+# 4. Outlier Detection
+
+Samples were screened for exclusion using a **consensus of three
+independent methods**, each flagging samples that are statistical outliers
+relative to the rest of the cohort:
+
+- **Missingness outliers:** samples with % missing proteins beyond
+  1.5$\times$IQR above the 75th percentile.
+- **PCA outliers:** samples with a Mahalanobis distance (computed on the
+  first 3 principal components of log2 intensities) exceeding the
+  99th-percentile $\chi^2$ threshold.
+- **Intensity outliers (MAD):** samples whose median log2 intensity
+  deviates from the cohort median by more than 3$\times$ the median absolute
+  deviation (MAD).
+
+A sample was excluded only if flagged by **at least 2 of the 3** methods,
+to avoid removing samples based on a single noisy metric.
+
+```{r outlier-plot, results='asis'}
+include_fig(p$outlier_diag_plot, caption = "Outlier diagnostics: missingness, PCA (Mahalanobis), and MAD intensity.")
+```
+
+```{r outlier-table, results='asis'}
+include_table(p$outlier_diag_csv, caption = "Full outlier diagnostic table (all samples, all metrics).")
+```
+
+\newpage
+
+# 5. Normalization
+
+Following filtering and outlier removal, protein intensities were
+normalized using **cyclic loess normalization**, which iteratively aligns
+the intensity distribution of each sample against the others via local
+regression (loess) on pairwise MA-plots. This corrects for
+sample-to-sample technical variation (e.g. differences in total protein
+loaded, digestion/labeling efficiency) without assuming the majority of
+proteins are unchanged between the two study arms, which a simpler
+median/quantile normalization would.
+
+**Quality control before vs. after normalization:**
+
+```{r pca-raw, results='asis'}
+include_fig(p$pca_raw, caption = "PCA of raw (pre-normalization) intensities, colored by group.", width = "48%")
+```
+
+```{r pca-postnorm, results='asis'}
+include_fig(p$pca_postnorm, caption = "PCA of normalized intensities, colored by group.", width = "48%")
+```
+
+```{r cv-prenorm, results='asis'}
+include_fig(p$cv_violin_prenorm, caption = "Per-protein coefficient of variation (CV) by group, pre-normalization.", width = "60%")
+```
+
+```{r cv-norm, results='asis'}
+include_fig(p$cv_violin_norm, caption = "Per-protein coefficient of variation (CV) by group, post-normalization.", width = "60%")
+```
+
+\newpage
+
+# 6. Differential Abundance Analysis
+
+Differential abundance was assessed with **limma**, fit across 5 contrasts
+representing the study's 2$\times$2 (arm $\times$ training) design plus the arm$\times$time
+interaction (see the contrast table in Section "Project Overview"). For
+each contrast, three complementary significance metrics were retained: the
+raw p-value, the Benjamini-Hochberg FDR-adjusted p-value, and a composite
+**Pi-value** (EDIT ME: confirm/insert your exact Pi-value formula and
+rationale here — e.g. combining significance and effect-size magnitude)
+used as the primary threshold (Pi-value < 0.05) for calling a protein
+differentially abundant.
+
+```{r fig02-da, results='asis'}
+include_fig(p$fig02_da, caption = "Number of differentially abundant proteins (DAPs) per contrast, by significance method.", width = "60%")
+```
+
+```{r fig02-upset, results='asis'}
+include_fig(p$fig02_upset, caption = "Overlap of differentially abundant proteins across contrasts (UpSet plot), colored by direction of change.")
+```
+
+\newpage
+
+# 7. Pathway / Enrichment Analysis
+
+For each of the 5 contrasts, two complementary enrichment approaches were
+run:
+
+**Gene Set Enrichment Analysis (GSEA)** — rank-based, using the limma
+t-statistic as the ranking metric, tested against 7 pathway/gene-set
+databases: GO Biological Process, GO Cellular Component, GO Molecular
+Function (via `clusterProfiler::gseGO`), a GO Slim subset, KEGG, Reactome,
+and MSigDB Hallmark gene sets.
+
+**Over-Representation Analysis (ORA)** — tested the sets of significantly
+up- and down-regulated proteins (Pi-value < 0.05) separately against GO
+BP/CC/MF, using all detected proteins as the statistical background.
+
+**Redundancy filtering.** Because gene set databases contain many
+near-duplicate terms (e.g. highly overlapping GO terms), a pooled greedy
+redundancy filter was applied within each contrast $\times$ database: significant
+pathways were ranked by adjusted p-value, and a pathway was dropped if its
+gene-set membership overlapped an already-retained, more-significant
+pathway above a threshold (Jaccard index $\geq$ 0.5 **or** overlap coefficient
+$\geq$ 0.5). This keeps the most significant representative of each cluster of
+redundant terms rather than reporting near-duplicates as independent hits.
+
+```{r fig02-gsea, results='asis'}
+include_fig(p$fig02_gsea, caption = "Number of significant (non-redundant) enriched pathways per contrast, by database.", width = "60%")
+```
+
+\newpage
+
+# 8. Summary Figure
+
+```{r fig02-full, results='asis'}
+include_fig(p$fig02_full, caption = "Combined overview: DAPs per contrast (A), pathway enrichment (B), contrast overlap (C), and per-group CV (D).", width = "95%")
+```
+
+# Next Steps
+
+EDIT ME: bullet list of planned follow-up analyses — e.g. specific pathway
+deep-dives, targeted validation, additional contrasts, figures still to be
+generated for the manuscript, etc.
