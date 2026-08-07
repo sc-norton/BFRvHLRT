@@ -81,13 +81,13 @@ db_slots <- c(
 )
 
 db_colors <- c(
-  "GO:BP"    = colors$red,
-  "GO:CC"    = colors$yellow,
-  "GO:MF"    = colors$blue,
-  "GO Slim"  = colors$green,
-  "KEGG"     = colors$purple,
-  "Reactome" = colors$brown,
-  "Hallmark" = colors$orange
+  "GO:BP"    = "#1b9e77",
+  "GO:CC"    = "#e6ab02",
+  "GO:MF"    = "#7570b3",
+  "GO Slim"  = "#66a61e",
+  "KEGG"     = "#d95f02",
+  "Reactome" = "#a6761d",
+  "Hallmark" = "#e7298a"
 )
 
 DIR_COLORS <- c(Up = colors$red, Down = colors$blue, Mixed = colors$purple)

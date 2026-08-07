@@ -1,9 +1,16 @@
 # Fig 03 — Volcano plots (BFR)
 #
 # ADAPTED FROM THE CR MUSCLE/PLASMA VERSION: that script faceted by
-# tissue (rows) x comparison (columns) for 3 SURV comparisons. BFR is a
-# single dataset with no tissue split, so this is a single-row facet over
-# BFR's 5 comparisons instead.
+# tissue (rows) x comparison (columns) for 3 SURV comparisons.
+#
+# RESTRUCTURED (this version): rather than one ggplot faceted across all
+# 5 comparisons, each comparison is now built as its own standalone
+# volcano plot (identical styling/logic to what each facet produced
+# before -- same points, labels, UP/DOWN counts, color scale), and the 5
+# are assembled into a lettered A-E grid via patchwork. Facet-specific
+# machinery (make_strip, facet_wrap2) is gone since there's no longer a
+# single faceted plot to theme strips for -- each panel gets its own
+# title instead of a facet strip label.
 
 # --- 0: Setup ------------------------
 setwd(rprojroot::find_rstudio_root_file())
@@ -29,23 +36,6 @@ dir.create(config$data_dir, showWarnings = FALSE, recursive = TRUE)
 
 # --- Color palette + theme ----------------------------------------------------
 source("04_figures/a_scripts/00_theme.R")
-
-make_strip <- function(fills, type = "x") {
-  n <- length(fills)
-  if (type == "x") {
-    strip_themed(
-      background_x = elem_list_rect(fill = fills, linewidth = rep(0, n)),
-      text_x       = elem_list_text(face = rep("bold", n))
-    )
-  } else if (type == "xy") {
-    strip_themed(
-      background_x = elem_list_rect(fill = fills$x, linewidth = rep(0, length(fills$x))),
-      background_y = elem_list_rect(fill = fills$y, linewidth = rep(0, length(fills$y))),
-      text_x       = elem_list_text(face = rep("bold", length(fills$x))),
-      text_y       = elem_list_text(face = rep("bold", length(fills$y)))
-    )
-  }
-}
 
 # --- 0e: Comparison Labels ---------------------------------------
 comp_labels <- c(
@@ -80,24 +70,36 @@ df_vol <- bind_rows(lapply(names(limma_results), function(nm) {
   limma_results[[nm]] %>% mutate(comparison = nm)
 }))
 
-# --- 3: Volcano plot function ---------------
-make_volcano_plot <- function(df_vol, selected_comparisons,
-                              n_labels = 5, pval_thresh = 0.05, lfc_thresh = 0.6) {
-  df <- df_vol %>%
-    filter(comparison %in% selected_comparisons) %>%
-    mutate(comparison = factor(comparison, levels = selected_comparisons))
+# --- 0f: Per-contrast background shading (edit these to change panel colors) ---
+# One solid background tint per panel, keyed by comparison name -- makes
+# it easy to tell the 5 panels apart at a glance in the combined figure.
+# Swap any of these for a different colors$... entry from 00_theme.R.
+PANEL_BG_COLORS <- c(
+  Baseline      = colors$gray,
+  Training_BFR  = colors$red_light,
+  Training_HLRT = colors$blue_light,
+  Post_training = colors$green_light,
+  Interaction   = colors$purple_light
+)
+PANEL_BG_ALPHA <- 0.15  # opacity -- higher = more visible tint
 
+# --- 3: Volcano plot function (single comparison) ---------------
+# Builds ONE panel for ONE comparison -- same internals as the old
+# faceted version's per-facet content, just without facet_wrap2. The
+# comparison name becomes a plot title instead of a facet strip label.
+make_volcano_plot <- function(df_vol, comparison_name, title, y_limit,
+                              n_labels = 5, pval_thresh = 0.05, lfc_thresh = 0.6) {
+  df <- df_vol %>% filter(comparison == comparison_name)
+  
   df_label <- df %>%
-    mutate(nudge_x = ifelse(DE.pi == "UP", 2.5, -2.5), nudge_y = 0.5) %>%
     filter(DE.pi != "NDE") %>%
-    group_by(comparison, DE.pi) %>%
+    group_by(DE.pi) %>%
     slice_max(abs(logFC), n = n_labels) %>%
     ungroup()
-
-  # Count UP and DOWN per facet
+  
   df_counts <- df %>%
     filter(DE.pi != "NDE") %>%
-    group_by(comparison, DE.pi) %>%
+    group_by(DE.pi) %>%
     summarise(n = n(), .groups = "drop") %>%
     mutate(
       x     = ifelse(DE.pi == "UP",  Inf, -Inf),
@@ -106,13 +108,10 @@ make_volcano_plot <- function(df_vol, selected_comparisons,
       label = as.character(n),
       color = ifelse(DE.pi == "UP", colors$red, colors$blue)
     )
-
-  strip <- make_strip(
-    fills = rep(colors$light_gray, length(selected_comparisons)),
-    type  = "x"
-  )
-
+  
   ggplot(df, aes(logFC, -log10(P.Value), color = DE.pi)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,
+             fill = PANEL_BG_COLORS[[comparison_name]], alpha = PANEL_BG_ALPHA) +
     geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, color = colors$gray) +
     geom_point(size = 1.2, alpha = 0.8) +
     geom_text_repel(data = df_label, aes(label = gene),
@@ -132,21 +131,70 @@ make_volcano_plot <- function(df_vol, selected_comparisons,
       inherit.aes = FALSE
     ) +
     scale_color_manual(values   = c(UP = colors$red, DOWN = colors$blue),
-                       na.value = colors$gray) +
+                       limits   = c("UP", "DOWN"),
+                       na.value = colors$gray, name = "Direction", drop = FALSE) +
     guides(color = guide_legend(override.aes = list(size = 4))) +
-    coord_cartesian(xlim = c(-4, 4)) +
-    facet_wrap2(~ comparison, nrow = 1, strip = strip,
-               labeller = labeller(comparison = comp_labels)) +
+    coord_cartesian(xlim = c(-2.5, 2.5), ylim = c(0, y_limit)) +
     labs(x = bquote(bold("log2(Fold Change)")), y = bquote(bold("-log10(p-value)")),
-         color = "Direction") +
-    theme_cr(base_size = 10)
+         title = title) +
+    theme_cr(base_size = 10) +
+    theme(plot.title = element_text(face = "bold", size = 11, hjust = 0.5))
 }
 
-# Build volcano
-volcano_all <- make_volcano_plot(
-  df_vol,
-  c("Baseline", "Training_BFR", "Training_HLRT", "Post_training", "Interaction")
+# --- 4: Build 5 panels and assemble A-E grid ---------------------------
+comparisons_ordered <- c("Baseline", "Training_BFR", "Training_HLRT",
+                         "Post_training", "Interaction")
+
+# Shared y-axis limit across ALL 5 contrasts (not per-panel), so every
+# panel uses the same -log10(p) scale and bar heights/point positions are
+# directly comparable at a glance. A small multiplier leaves headroom
+# above the tallest point so it isn't flush against the panel edge.
+y_limit <- max(-log10(df_vol$P.Value), na.rm = TRUE) * 1.05
+
+volcano_panels <- lapply(comparisons_ordered, function(cmp) {
+  make_volcano_plot(df_vol, cmp, title = comp_labels[[cmp]], y_limit = y_limit)
+})
+
+# guides = "collect" is supposed to merge identical legends across panels
+# automatically, but in practice it can fail to recognize two legends as
+# identical if the underlying DE.pi values aren't perfectly consistent
+# across contrasts (stray capitalization, an extra category present in
+# only one sheet, etc.) -- rather than debug that per-dataset quirk, this
+# builds ONE legend from a clean synthetic UP/DOWN dataframe (guaranteed
+# correct, independent of whatever inconsistency is in the real data) and
+# attaches it manually instead of relying on automatic collection.
+#
+# Custom layout: A/B/C across the top row, D/E centered on the bottom row
+# with blank ("#") cells flanking them. wrap_plots() matches the plot
+# list to design letters in order (volcano_panels is already in
+# comparisons_ordered order: Baseline=A, Training_BFR=B, Training_HLRT=C,
+# Post_training=D, Interaction=E).
+layout_design <- "
+AAAABBBBCCCC
+##DDDDEEEE##
+"
+
+volcano_grid <- wrap_plots(volcano_panels) +
+  plot_layout(design = layout_design) +
+  plot_annotation(tag_levels = "A") &
+  theme(legend.position = "none")
+
+legend_source <- ggplot(
+  tibble(Direction = factor(c("UP", "DOWN"), levels = c("UP", "DOWN"))),
+  aes(x = 1, y = 1, color = Direction)
+) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c(UP = colors$red, DOWN = colors$blue), name = "Direction") +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_cr(base_size = 10) +
+  theme(legend.position = "right")
+
+shared_legend <- cowplot::get_legend(legend_source)
+
+volcano_all <- cowplot::plot_grid(
+  volcano_grid, shared_legend,
+  ncol = 2, rel_widths = c(1, 0.08)
 )
 
-ggsave(file.path(config$fig_dir, "panel_3A.pdf"), volcano_all, width = 16, height = 4, device = "pdf")
-ggsave(file.path(config$fig_dir, "panel_3A.png"), volcano_all, width = 16, height = 4, device = "png", dpi = 300)
+ggsave(file.path(config$fig_dir, "panel_3A.pdf"), volcano_all, width = 16, height = 9, device = "pdf")
+ggsave(file.path(config$fig_dir, "panel_3A.png"), volcano_all, width = 16, height = 9, device = "png", dpi = 300)

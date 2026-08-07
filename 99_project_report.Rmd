@@ -1,7 +1,7 @@
 ---
-title: "Muscle Proteomic Response to Blood Flow Restriction Training"
+title: "Muscle Proteomic Response to Blood Flow Restriction versus High-Load Resistance Training"
 subtitle: "Preliminary Analysis Report — BFR vs. HLRT"
-author: "EDIT ME: Your Name"
+author: "NAMPL"
 date: "`r format(Sys.Date(), '%B %d, %Y')`"
 output:
   pdf_document:
@@ -10,6 +10,8 @@ output:
 geometry: margin=1in
 fontsize: 11pt
 header-includes:
+  - \usepackage{float}
+  - \usepackage{grffile}
   - \usepackage{fancyhdr}
   - \usepackage{booktabs}
   - \pagestyle{fancy}
@@ -17,6 +19,7 @@ header-includes:
   - \fancyhead[R]{\small BFR Proteomics — Preliminary Report}
   - \fancyfoot[C]{\thepage}
   - \renewcommand{\headrulewidth}{0.4pt}
+  - \renewcommand{\maketitle}{}
 ---
 
 <!--
@@ -48,10 +51,37 @@ HOW TO USE THIS FILE
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 
 if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
-pacman::p_load(dplyr, readr, knitr)
+pacman::p_load(dplyr, readr, knitr, kableExtra)
 
 # --- Project root -------------------------------------------------------
-base_dir <- tryCatch(rprojroot::find_rstudio_root_file(), error = function(e) getwd())
+# Robust resolution + diagnostics. If figures/tables show "not yet
+# available" even though the files exist, it means base_dir below isn't
+# pointing at your actual project folder -- check the printed values
+# first before looking anywhere else.
+base_dir <- getwd()
+
+# rprojroot::find_rstudio_root_file() requires an actual .Rproj file to
+# exist; if getwd() doesn't already look like the project root (no
+# 01_normalization/ folder under it), try rprojroot as a fallback before
+# giving up.
+if (!dir.exists(file.path(base_dir, "01_normalization"))) {
+  base_dir <- tryCatch(rprojroot::find_rstudio_root_file(), error = function(e) getwd())
+}
+
+cat("Resolved base_dir:", base_dir, "\n")
+cat("  01_normalization/ found here:", dir.exists(file.path(base_dir, "01_normalization")), "\n")
+cat("  04_figures/       found here:", dir.exists(file.path(base_dir, "04_figures")), "\n")
+
+if (!dir.exists(file.path(base_dir, "01_normalization"))) {
+  warning(
+    "base_dir does not contain your pipeline folders (01_normalization/, ",
+    "04_figures/, etc.) -- every file path below will resolve incorrectly. ",
+    "Hardcode the correct path manually, e.g.:\n",
+    '  base_dir <- "/Users/yourname/Desktop/YourProjectFolder"\n',
+    "immediately after this warning, then re-knit."
+  )
+}
+
 knitr::opts_knit$set(root.dir = base_dir)
 
 # --- Paths to existing pipeline outputs ----------------------------------
@@ -61,14 +91,12 @@ p <- list(
   # Normalization: data
   sample_summary_raw = "01_normalization/c_data/00_raw_sample_summary.csv",
   protein_report      = "01_normalization/c_data/11_protein_report_BFR.csv",
-  outlier_diag_csv     = "01_normalization/c_data/06_outlier_diagnostics_BFR.csv",
 
   # Normalization: reports
   sample_report        = "01_normalization/b_reports/12_sample_report_BFR.csv",
   filtering_effects     = "01_normalization/b_reports/02_filtering_effects_BFR.csv",
   filtering_plot        = "01_normalization/b_reports/04_filtering_plot_BFR.pdf",
   contam_bm_plot        = "01_normalization/b_reports/01_blood_v_muscle_intensity_plot_raw.pdf",
-  contam_donut          = "01_normalization/b_reports/05_contaminant_classification.png",
   outlier_diag_plot     = "01_normalization/b_reports/06_outlier_diagnostic_plots_BFR.pdf",
   pca_raw               = "01_normalization/b_reports/09_pca_raw_BFR.pdf",
   pca_postnorm           = "01_normalization/b_reports/09_pca_postnorm_BFR.pdf",
@@ -80,14 +108,65 @@ p <- list(
   fig02_gsea  = "04_figures/fig_02/fig_02_B.png",
   fig02_upset = "04_figures/fig_02/fig_02_C.png",
   fig02_cv    = "04_figures/fig_02/fig_02_D.png",
-  fig02_full  = "04_figures/fig_02/fig_02.png"
+
+  # Analysis figures (fig_03)
+  fig03_volcano = "04_figures/fig_03/panel_3A.png",
+
+  # Analysis figures (protein-level intensity: PRE/POST by contrast)
+  intensity_bfr_up      = "04_figures/fig_protein_intensity/intensity_Training_BFR_up.png",
+  intensity_bfr_down    = "04_figures/fig_protein_intensity/intensity_Training_BFR_down.png",
+  intensity_hlrt_up     = "04_figures/fig_protein_intensity/intensity_Training_HLRT_up.png",
+  intensity_hlrt_down   = "04_figures/fig_protein_intensity/intensity_Training_HLRT_down.png",
+  intensity_both_up     = "04_figures/fig_protein_intensity/intensity_both_concordant_up.png",
+  intensity_both_down   = "04_figures/fig_protein_intensity/intensity_both_concordant_down.png",
+
+  # Analysis figures (GSEA bubble plot)
+  gsea_bubble_BFR = "04_figures/fig_gsea_bubble/gsea_bubble_BFR_Training_BFR_top30_percontrast.png",
+  gsea_bubble_HLRT = "04_figures/fig_gsea_bubble/gsea_bubble_BFR_Training_HLRT_top30_percontrast.png",
+
+  # Analysis figures (GSEA differential: Training_BFR vs Training_HLRT)
+  gsea_diff_counts  = "04_figures/fig_gsea_differential/gsea_differential_counts.png",
+  gsea_diff_scatter = "04_figures/fig_gsea_differential/gsea_differential_scatter.png"
 )
 p <- lapply(p, function(x) file.path(base_dir, x))
 
 # --- Helpers: fail gracefully instead of breaking the knit ---------------
+
+# Raw LaTeX (used below for [H] hard placement) doesn't get pandoc's
+# automatic escaping of special characters the way markdown text does.
+# Underscores especially -- e.g. "Training_BFR" in a caption -- are
+# reserved math-mode characters in LaTeX and cause a "Missing $ inserted"
+# error if passed through unescaped. grffile (in header-includes) handles
+# underscores in \includegraphics filenames; this handles them (and other
+# LaTeX special characters) in caption text, which grffile doesn't cover.
+escape_latex <- function(x) {
+  x <- gsub("\\", "\u0001BACKSLASH\u0001", x, fixed = TRUE)
+  x <- gsub("&", "\\&", x, fixed = TRUE)
+  x <- gsub("%", "\\%", x, fixed = TRUE)
+  x <- gsub("$", "\\$", x, fixed = TRUE)
+  x <- gsub("#", "\\#", x, fixed = TRUE)
+  x <- gsub("_", "\\_", x, fixed = TRUE)
+  x <- gsub("{", "\\{", x, fixed = TRUE)
+  x <- gsub("}", "\\}", x, fixed = TRUE)
+  x <- gsub("~", "\\textasciitilde{}", x, fixed = TRUE)
+  x <- gsub("^", "\\textasciicircum{}", x, fixed = TRUE)
+  x <- gsub("\u0001BACKSLASH\u0001", "\\textbackslash{}", x, fixed = TRUE)
+  x
+}
+
 include_fig <- function(path, caption = "", width = "85%") {
   if (file.exists(path)) {
-    cat(sprintf("![%s](%s){width=%s}\n\n", caption, path, width))
+    # Raw LaTeX instead of markdown image syntax: [H] (hard placement,
+    # via the float package loaded in header-includes) forces the figure
+    # to render exactly here rather than letting LaTeX's automatic float
+    # algorithm push it elsewhere in the document -- pandoc's markdown
+    # image syntax has no placement control, which is what was causing
+    # figures to drift away from their position in the .Rmd source.
+    width_frac <- as.numeric(sub("%", "", width)) / 100
+    cat(sprintf(
+      "\\begin{figure}[H]\n\\centering\n\\includegraphics[width=%.2f\\linewidth]{%s}\n\\caption{%s}\n\\end{figure}\n\n",
+      width_frac, path, escape_latex(caption)
+    ))
   } else {
     cat(sprintf("*[Figure not yet available: `%s` — run the corresponding pipeline step to generate it.]*\n\n",
                 basename(path)))
@@ -101,7 +180,13 @@ include_table <- function(path, caption = "", max_rows = 20) {
       cat(sprintf("*(showing first %d of %d rows)*\n\n", max_rows, nrow(df)))
       df <- head(df, max_rows)
     }
-    print(knitr::kable(df, caption = caption, row.names = FALSE, booktabs = TRUE))
+    # HOLD_position (kableExtra) = hard [H] placement, same rationale as
+    # include_fig above -- without this, tables float away from their
+    # position in the source too.
+    print(
+      knitr::kable(df, caption = caption, row.names = FALSE, booktabs = TRUE) %>%
+        kableExtra::kable_styling(latex_options = c("HOLD_position"))
+    )
   } else {
     cat(sprintf("*[Table not yet available: `%s`]*\n\n", basename(path)))
   }
@@ -112,16 +197,16 @@ include_table <- function(path, caption = "", max_rows = 20) {
 \centering
 \vspace*{2cm}
 
-{\LARGE \bfseries Muscle Proteomic Response to Blood Flow Restriction Training}
+{\LARGE \bfseries Muscle Proteomic Response to Blood Flow Restriction versus High-Load Resistance Training}
 
 \vspace{0.5cm}
 {\Large Preliminary Analysis Report}
 
 \vspace{1.5cm}
-{\large Prepared for: \textbf{EDIT ME: PI Name}}
+{\large Prepared for: \textbf{Dr. Cleiton Libardi}}
 
 \vspace{0.3cm}
-{\large Prepared by: \textbf{EDIT ME: Your Name}}
+{\large Prepared by: \textbf{Sam Norton and Tahran Gotla}}
 
 \vspace{0.3cm}
 {\large `r format(Sys.Date(), '%B %d, %Y')`}
@@ -144,12 +229,12 @@ revision as the analysis pipeline continues.}
 
 # Project Overview
 
-EDIT ME: 1-2 paragraphs on study background/aims — e.g. blood flow restriction
-(BFR) vs. high-load resistance training (HLRT), what muscle adaptation
-question this proteomics dataset addresses, cohort size, timepoints
-(pre/post training), and tissue collected.
+An examination of the proteomic alterations induced by blood flow restriction
+(BFR) vs. high-load resistance training (HLRT) in human vastus lateralis biopsy 
+samples. N=33 participants' legs were randomly assigned to BFR or HLRT. Biopsies
+were donated PRE and POST training.
 
-**Study design at a glance:**
+**Proteomic analysis design at a glance:**
 
 ```{r contrast-table}
 contrast_tbl <- tibble::tribble(
@@ -160,11 +245,16 @@ contrast_tbl <- tibble::tribble(
   "Post_training",  "BFR_POST vs HLRT_POST",      "Do the two arms differ after training?",
   "Interaction",    "(BFR_POST-BFR_PRE) vs (HLRT_POST-HLRT_PRE)", "Does the training response itself differ by modality?"
 )
-knitr::kable(contrast_tbl, booktabs = TRUE)
+knitr::kable(contrast_tbl, booktabs = TRUE) %>%
+  kableExtra::kable_styling(latex_options = c("HOLD_position")) %>%
+  kableExtra::column_spec(1, width = "1in") %>%
+  kableExtra::column_spec(2, width = "1.9in") %>%
+  kableExtra::column_spec(3, width = "3.1in")
 ```
 
 ```{r sample-summary-text, results='asis'}
-include_table(p$sample_report, caption = "Final sample counts by group (post-QC).")
+include_table(p$sample_report,
+             caption = "Final sample counts per group after filtering and outlier removal: paired (both PRE and POST present), PRE-only, and POST-only subjects, with subject and sample totals.")
 ```
 
 \newpage
@@ -203,10 +293,6 @@ prior to any filtering:
   before proceeding (a hard `stopifnot` check — the pipeline halts rather
   than silently misaligning samples).
 
-```{r raw-summary, results='asis'}
-include_table(p$sample_summary_raw, caption = "Raw sample counts by group, prior to any QC or filtering.")
-```
-
 \newpage
 
 # 2. Contaminant Assessment
@@ -233,10 +319,6 @@ contamination (e.g. from incomplete blood clearance during biopsy).
 
 ```{r contam-bm-plot, results='asis'}
 include_fig(p$contam_bm_plot, caption = "Blood vs. muscle marker proportion of total intensity, per sample.")
-```
-
-```{r contam-donut, results='asis'}
-include_fig(p$contam_donut, caption = "Classification of flagged contaminant proteins by category.", width = "60%")
 ```
 
 \newpage
@@ -290,10 +372,6 @@ to avoid removing samples based on a single noisy metric.
 include_fig(p$outlier_diag_plot, caption = "Outlier diagnostics: missingness, PCA (Mahalanobis), and MAD intensity.")
 ```
 
-```{r outlier-table, results='asis'}
-include_table(p$outlier_diag_csv, caption = "Full outlier diagnostic table (all samples, all metrics).")
-```
-
 \newpage
 
 # 5. Normalization
@@ -330,12 +408,11 @@ include_fig(p$cv_violin_norm, caption = "Per-protein coefficient of variation (C
 # 6. Differential Abundance Analysis
 
 Differential abundance was assessed with **limma**, fit across 5 contrasts
-representing the study's 2$\times$2 (arm $\times$ training) design plus the arm$\times$time
+representing the study's 2 $\times$ 2 (arm $\times$ training) design plus the arm$\times$time
 interaction (see the contrast table in Section "Project Overview"). For
 each contrast, three complementary significance metrics were retained: the
 raw p-value, the Benjamini-Hochberg FDR-adjusted p-value, and a composite
-**Pi-value** (EDIT ME: confirm/insert your exact Pi-value formula and
-rationale here — e.g. combining significance and effect-size magnitude)
+**Pi-value** (p^|log2FC|; Xiao et al., 2014)
 used as the primary threshold (Pi-value < 0.05) for calling a protein
 differentially abundant.
 
@@ -345,6 +422,40 @@ include_fig(p$fig02_da, caption = "Number of differentially abundant proteins (D
 
 ```{r fig02-upset, results='asis'}
 include_fig(p$fig02_upset, caption = "Overlap of differentially abundant proteins across contrasts (UpSet plot), colored by direction of change.")
+```
+
+\newpage
+
+## Volcano Plots by Contrast
+
+Per-protein volcano plots for each of the 5 contrasts, showing effect size
+(log2 fold change) against significance (-log10 p-value). Proteins are
+colored by direction of change, with the top proteins by fold-change
+magnitude labeled in each panel and UP/DOWN counts annotated in the
+corners.
+
+```{r fig03-volcano, results='asis'}
+include_fig(p$fig03_volcano, caption = "Volcano plots for all 5 contrasts.", width = "95%")
+```
+
+\newpage
+
+## Protein-Level Intensity Plots
+
+**Proteins concordantly significant in both contrasts.** The following
+show proteins that were significantly up- or down-regulated with the
+*same direction* in both Training_BFR and Training_HLRT (ranked so both
+contrasts' p-values must be small, not just one), with all four
+group $\times$ timepoint combinations shown per protein (BFR PRE/POST,
+HLRT PRE/POST) to visualize the shared response pattern across both
+training modalities directly.
+
+```{r intensity-both-up, results='asis'}
+include_fig(p$intensity_both_up, caption = "Top 20 up-regulated proteins, significant in both Training_BFR and Training_HLRT.", width = "95%")
+```
+
+```{r intensity-both-down, results='asis'}
+include_fig(p$intensity_both_down, caption = "Top 20 down-regulated proteins, significant in both Training_BFR and Training_HLRT.", width = "95%")
 ```
 
 \newpage
@@ -363,6 +474,7 @@ and MSigDB Hallmark gene sets.
 **Over-Representation Analysis (ORA)** — tested the sets of significantly
 up- and down-regulated proteins (Pi-value < 0.05) separately against GO
 BP/CC/MF, using all detected proteins as the statistical background.
+NOTE: no ORA results are included in this report. 
 
 **Redundancy filtering.** Because gene set databases contain many
 near-duplicate terms (e.g. highly overlapping GO terms), a pooled greedy
@@ -377,16 +489,40 @@ redundant terms rather than reporting near-duplicates as independent hits.
 include_fig(p$fig02_gsea, caption = "Number of significant (non-redundant) enriched pathways per contrast, by database.", width = "60%")
 ```
 
-\newpage
+## GSEA Bubble Plot
 
-# 8. Summary Figure
+Significant Hallmark and GO Biological Process pathways for the
+Training_BFR and Training_HLRT contrasts, restricted to redundancy-filter
+representative pathways (Section 7's redundancy filtering, applied above
+before ranking). Point size reflects statistical confidence
+(-log~10~ FDR), fill color reflects normalized enrichment score (NES,
+red = up in that contrast, blue = down), and outline indicates whether
+that specific point clears the FDR < 0.05 threshold.
 
-```{r fig02-full, results='asis'}
-include_fig(p$fig02_full, caption = "Combined overview: DAPs per contrast (A), pathway enrichment (B), contrast overlap (C), and per-group CV (D).", width = "95%")
+```{r gsea-bubble-BFR, results='asis'}
+include_fig(p$gsea_bubble_BFR, caption = "GSEA bubble plot: Top 30 pathways significant in the Training_BFR contrast across 7 databases.", width = "90%")
 ```
 
-# Next Steps
+```{r gsea-bubble-HLRT, results='asis'}
+include_fig(p$gsea_bubble_HLRT, caption = "GSEA bubble plot: Top 30 pathways significant in the Training_HLRT contrast across 7 databases.", width = "90%")
+```
 
-EDIT ME: bullet list of planned follow-up analyses — e.g. specific pathway
-deep-dives, targeted validation, additional contrasts, figures still to be
-generated for the manuscript, etc.
+\newpage
+
+## Differential Pathway Analysis: BFR vs. HLRT Training Response
+
+To assess whether the two training modalities engage the same or
+different biological pathways, every redundancy-filtered pathway was
+classified by its significance and direction (NES sign) in Training_BFR
+vs. Training_HLRT: **BFR only** or **HLRT only** (significant in one
+contrast but not the other), **Discordant** (significant in both, but
+opposite direction), or **Concordant** (significant in both, same
+direction). Pathways in the first three categories represent genuine
+differences between the two training modalities; concordant pathways
+are explicitly excluded from that "different" set, since those are
+pathways that respond the same way regardless of modality. NOTE: no
+significant discordant pathways were identified.
+
+```{r gsea-diff-counts, results='asis'}
+include_fig(p$gsea_diff_counts, caption = "Pathway classification counts by status and database, Training_BFR vs Training_HLRT.", width = "75%")
+```
